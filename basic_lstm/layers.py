@@ -39,8 +39,8 @@ class LSTMCell:
         """
         :param dim_state: dimensionality of the LSTM's state vector
         :param dim_in: dimensionality of the LSTM's input vectors
-        :param initial_state: a tf.placeholder of the shape [batch_size, dim_state] to be used as the initial state
-        :param initial_output: a tf.placeholder of the shape [batch_size, dim_state] to be used as the initial 'previous output'
+        :param initial_state: a tf tensor of the shape [batch_size, dim_state] to be used as the initial state
+        :param initial_output: a tf tensor of the shape [batch_size, dim_state] to be used as the initial 'previous output'
         """
         self.forget_gate = FCLayer([dim_in, dim_state], dim_state, tf.sigmoid)
         self.input_gate = FCLayer([dim_in, dim_state], dim_state, tf.sigmoid)

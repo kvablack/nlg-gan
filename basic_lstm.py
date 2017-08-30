@@ -5,11 +5,11 @@ from nltk.corpus import gutenberg
 from basic_lstm.model import NlpGan
 import utils
 
-LEARNING_RATE = 0.0002
-DIM_STATE = 100
+LEARNING_RATE = 0.00005
+DIM_STATE = 300
 WORD_DIM = 300
 SEQUENCE_LENGTH = 50
-BATCH_SIZE = 60
+BATCH_SIZE = 100
 
 
 def nearest_neighbor(words, wordvecs_norm, wordvec_norm):
@@ -83,9 +83,9 @@ def main():
     print("Generating graph...")
     network = NlpGan(learning_rate=LEARNING_RATE, dim_state=DIM_STATE, dim_in=WORD_DIM, sequence_length=SEQUENCE_LENGTH)
 
-    plotter = Plotter(2, "Loss", "Accuracy")
-    plotter.plot(0, 0, 0)
-    plotter.plot(0, 0, 1)
+    plotter = Plotter([1, 1], "Loss", "Accuracy")
+    plotter.plot(0, 0, 0, 0)
+    #plotter.plot(0, 0, 1, 0)
 
     saver = tf.train.Saver()
 
@@ -106,48 +106,44 @@ def main():
                 # real text
                 output_dict_real = sess.run(
                     network.get_fetch_dict('d_loss', 'd_train'),
-                    network.get_feed_dict(inputs=s_batch_real, labels=np.ones([BATCH_SIZE, 1]),
-                                          initial_state=np.zeros([BATCH_SIZE, DIM_STATE]),
-                                          initial_output=np.zeros([BATCH_SIZE, DIM_STATE]))
+                    network.get_feed_dict(inputs=s_batch_real, labels=np.ones([BATCH_SIZE, 1]))
                 )
 
                 s_batch_fake = gen_fake_sentences(sentences_rev, BATCH_SIZE)
                 # fake text
                 output_dict_fake = sess.run(
                     network.get_fetch_dict('d_loss', 'd_train'),
-                    network.get_feed_dict(inputs=s_batch_fake, labels=np.zeros([BATCH_SIZE, 1]),
-                                          initial_state=np.zeros([BATCH_SIZE, DIM_STATE]),
-                                          initial_output=np.zeros([BATCH_SIZE, DIM_STATE]))
+                    network.get_feed_dict(inputs=s_batch_fake, labels=np.zeros([BATCH_SIZE, 1]))
                 )
 
                 total_loss = (output_dict_real['d_loss'] + output_dict_fake['d_loss']) / 2.0
                 if batch % 10 == 0:
                     print("Finished training batch %d / %d" % (batch, int(len(s_train_idxs) / BATCH_SIZE)))
                     print("Total Loss: %f" % total_loss)
-                    plotter.plot(epoch + (batch / int(len(s_train_idxs) / BATCH_SIZE)), total_loss, 0)
+                    plotter.plot(epoch + (batch / int(len(s_train_idxs) / BATCH_SIZE)), total_loss, 0, 0)
 
-            # after epoch is finished, evaluate accuracy
-            print("Evaluating accuracy...")
-            output_dict_eval_real = sess.run(
-                network.get_fetch_dict('d_accuracy'),
-                network.get_feed_dict(inputs=s_eval, labels=np.ones([s_eval_len, 1]),
-                                      initial_state=np.zeros([s_eval_len, DIM_STATE]),
-                                      initial_output=np.zeros([s_eval_len, DIM_STATE]))
-            )
-            s_eval_fake = gen_fake_sentences(sentences_rev, s_eval_len)
-            output_dict_eval_fake = sess.run(
-                network.get_fetch_dict('d_accuracy'),
-                network.get_feed_dict(inputs=s_eval_fake, labels=np.zeros([s_eval_len, 1]),
-                                      initial_state=np.zeros([s_eval_len, DIM_STATE]),
-                                      initial_output=np.zeros([s_eval_len, DIM_STATE]))
-            )
-            total_accuracy = (output_dict_eval_real['d_accuracy'] + output_dict_eval_fake['d_accuracy']) / 2.0
-            print("Total Accuracy: %f" % total_accuracy)
-            plotter.plot(epoch + 1, total_accuracy, 1)
+                if batch % 50 == 0:
+                    total_accuracy = eval_accuracy(network, s_eval, gen_fake_sentences(sentences_rev, s_eval_len),
+                                                   s_eval_len, sess)
+                    print("Total Accuracy: %f" % total_accuracy)
+                    plotter.plot(epoch + (batch / int(len(s_train_idxs) / BATCH_SIZE)), total_accuracy, 1, 0)
 
-            if epoch % 10 == 0:
-                saver.save(sess, './checkpoints/test.ckpt',
-                           global_step=epoch)
+            saver.save(sess, './checkpoints/test3.ckpt',
+                       global_step=epoch)
+
+
+def eval_accuracy(network, s_eval, s_eval_fake, s_eval_len, sess):
+    print("Evaluating accuracy...")
+    output_dict_eval_real = sess.run(
+        network.get_fetch_dict('d_accuracy'),
+        network.get_feed_dict(inputs=s_eval, labels=np.ones([s_eval_len, 1]))
+    )
+    output_dict_eval_fake = sess.run(
+        network.get_fetch_dict('d_accuracy'),
+        network.get_feed_dict(inputs=s_eval_fake, labels=np.zeros([s_eval_len, 1]))
+    )
+    total_accuracy = (output_dict_eval_real['d_accuracy'] + output_dict_eval_fake['d_accuracy']) / 2.0
+    return total_accuracy
 
 if __name__ == '__main__':
     main()
