@@ -5,8 +5,8 @@ from nltk.corpus import gutenberg
 from basic_lstm.model import NlpGan
 import utils
 
-LEARNING_RATE = 0.00005
-DIM_STATE = 300
+LEARNING_RATE = 0.00003
+DIM_STATE = 500
 WORD_DIM = 300
 SEQUENCE_LENGTH = 50
 BATCH_SIZE = 100
@@ -43,10 +43,11 @@ def pad_or_truncate(sentence):
         return sentence[:SEQUENCE_LENGTH]
 
 
-def gen_fake_sentences(sentences_rev, n):
-    fake_batch = [sentences_rev[x] for x in np.random.randint(0, len(sentences_rev), n)]
-    fake_batch = np.array(fake_batch).reshape(-1, WORD_DIM).reshape(SEQUENCE_LENGTH, n, WORD_DIM, order='F')
-    return fake_batch
+def rand_swap(sentence):
+    i1, i2 = np.random.randint(0, len(sentence), 2)
+    sentence_fake = list(sentence)
+    sentence_fake[i1], sentence_fake[i2] = sentence_fake[i2], sentence_fake[i1]
+    return sentence_fake
 
 
 def main():
@@ -63,29 +64,36 @@ def main():
                  for sentence in gutenberg.sents()]
 
     print("Processing corpus...")
-    sentences_rev = [sentence[::-1] for sentence in sentences]
+    # Randomly swap words in each sentence
+    sentences_fake = list(map(rand_swap, sentences))
+
     # Pad sentences shorter than SEQUENCE_LENGTH with zero vectors and truncate sentences longer than SEQUENCE_LENGTH
     sentences = list(map(pad_or_truncate, sentences))
-    sentences_rev = list(map(pad_or_truncate, sentences_rev))
+    sentences_fake = list(map(pad_or_truncate, sentences_fake))
 
     # Split up into train/eval sections, 97% train and 3% eval
     s_train, s_eval = sentences[:int(len(sentences) * 0.97)], sentences[int(len(sentences) * 0.97):]
+    s_train_fake, s_eval_fake = sentences_fake[:int(len(sentences) * 0.97)], sentences_fake[int(len(sentences) * 0.97):]
+
     # Truncate to multiple of BATCH_SIZE
     s_train = s_train[:int(len(s_train) / BATCH_SIZE) * BATCH_SIZE]
+    s_train_fake = s_train_fake[:int(len(s_train_fake) / BATCH_SIZE) * BATCH_SIZE]
 
     s_eval_len = len(s_eval)
     # reshape to (SEQUENCE_LENGTH, BATCH_SIZE, WORD_DIM) while preserving sentence order; BATCH_SIZE is entire dataset
     # in this case
     s_eval = np.array(s_eval).reshape(-1, WORD_DIM).reshape(SEQUENCE_LENGTH, -1, WORD_DIM, order='F')
+    s_eval_fake = np.array(s_eval_fake).reshape(-1, WORD_DIM).reshape(SEQUENCE_LENGTH, -1, WORD_DIM, order='F')
 
     s_train_idxs = np.arange(len(s_train))
+    s_train_fake_idxs = np.arange(len(s_train))
 
     print("Generating graph...")
     network = NlpGan(learning_rate=LEARNING_RATE, dim_state=DIM_STATE, dim_in=WORD_DIM, sequence_length=SEQUENCE_LENGTH)
 
-    plotter = Plotter([1, 1], "Loss", "Accuracy")
+    plotter = Plotter([2, 1], "Loss", "Accuracy")
     plotter.plot(0, 0, 0, 0)
-    #plotter.plot(0, 0, 1, 0)
+    plotter.plot(0, 1, 1, 0)
 
     saver = tf.train.Saver()
 
@@ -96,12 +104,15 @@ def main():
             print("Epoch %d" % epoch)
 
             np.random.shuffle(s_train_idxs)
+            np.random.shuffle(s_train_fake_idxs)
             for batch in range(int(len(s_train_idxs) / BATCH_SIZE)):
                 # select next random batch of sentences
                 s_batch_real = [s_train[x] for x in s_train_idxs[batch:batch + BATCH_SIZE]] # shape (BATCH_SIZE, SEQUENCE_LENGTH, WORD_DIM)
+                s_batch_fake = [s_train_fake[x] for x in s_train_fake_idxs[batch:batch + BATCH_SIZE]]
 
                 # reshape to (SEQUENCE_LENGTH, BATCH_SIZE, WORD_DIM) while preserving sentence order
                 s_batch_real = np.array(s_batch_real).reshape(-1, WORD_DIM).reshape(SEQUENCE_LENGTH, BATCH_SIZE, WORD_DIM, order='F')
+                s_batch_fake = np.array(s_batch_fake).reshape(-1, WORD_DIM).reshape(SEQUENCE_LENGTH, BATCH_SIZE, WORD_DIM, order='F')
 
                 # real text
                 output_dict_real = sess.run(
@@ -109,7 +120,6 @@ def main():
                     network.get_feed_dict(inputs=s_batch_real, labels=np.ones([BATCH_SIZE, 1]))
                 )
 
-                s_batch_fake = gen_fake_sentences(sentences_rev, BATCH_SIZE)
                 # fake text
                 output_dict_fake = sess.run(
                     network.get_fetch_dict('d_loss', 'd_train'),
@@ -118,32 +128,34 @@ def main():
 
                 total_loss = (output_dict_real['d_loss'] + output_dict_fake['d_loss']) / 2.0
                 if batch % 10 == 0:
-                    print("Finished training batch %d / %d" % (batch, int(len(s_train_idxs) / BATCH_SIZE)))
+                    print("Finished training batch %d / %d" % (batch, int(len(s_train) / BATCH_SIZE)))
                     print("Total Loss: %f" % total_loss)
-                    plotter.plot(epoch + (batch / int(len(s_train_idxs) / BATCH_SIZE)), total_loss, 0, 0)
+                    plotter.plot(epoch + (batch / int(len(s_train) / BATCH_SIZE)), total_loss, 0, 0)
 
-                if batch % 50 == 0:
-                    total_accuracy = eval_accuracy(network, s_eval, gen_fake_sentences(sentences_rev, s_eval_len),
-                                                   s_eval_len, sess)
-                    print("Total Accuracy: %f" % total_accuracy)
-                    plotter.plot(epoch + (batch / int(len(s_train_idxs) / BATCH_SIZE)), total_accuracy, 1, 0)
+                if batch % 100 == 0:
+                    eval_accuracy, eval_loss = eval(network, s_eval, s_eval_fake, s_eval_len, sess)
+                    print("Total Accuracy: %f" % eval_accuracy)
+                    plotter.plot(epoch + (batch / int(len(s_train) / BATCH_SIZE)), eval_accuracy, 1, 0)
+                    plotter.plot(epoch + (batch / int(len(s_train) / BATCH_SIZE)), eval_loss, 0, 1)
 
-            saver.save(sess, './checkpoints/test3.ckpt',
+            saver.save(sess, './checkpoints/test4.ckpt',
                        global_step=epoch)
 
 
-def eval_accuracy(network, s_eval, s_eval_fake, s_eval_len, sess):
+def eval(network, s_eval, s_eval_fake, s_eval_len, sess):
     print("Evaluating accuracy...")
     output_dict_eval_real = sess.run(
-        network.get_fetch_dict('d_accuracy'),
+        network.get_fetch_dict('d_accuracy', 'd_loss'),
         network.get_feed_dict(inputs=s_eval, labels=np.ones([s_eval_len, 1]))
     )
+
     output_dict_eval_fake = sess.run(
-        network.get_fetch_dict('d_accuracy'),
+        network.get_fetch_dict('d_accuracy', 'd_loss'),
         network.get_feed_dict(inputs=s_eval_fake, labels=np.zeros([s_eval_len, 1]))
     )
     total_accuracy = (output_dict_eval_real['d_accuracy'] + output_dict_eval_fake['d_accuracy']) / 2.0
-    return total_accuracy
+    total_loss = (output_dict_eval_real['d_loss'] + output_dict_eval_fake['d_loss']) / 2.0
+    return total_accuracy, total_loss
 
 if __name__ == '__main__':
     main()
