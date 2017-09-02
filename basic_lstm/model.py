@@ -15,6 +15,7 @@ class NlpGan(Model):
 
     Placeholders:
         :ivar inputs: Shape [sequence_length, batch_size, dim_in] to be fed to the network
+        :ivar input_dropout: keep_prob for input dropout
 
     Fetchable output tensors:
         :ivar d_loss: discriminator loss across entire batch and sequence
@@ -25,12 +26,9 @@ class NlpGan(Model):
         self.placeholders['inputs'] = tf.placeholder(tf.float32, shape=[self.hyperparameters['sequence_length'], None,
                                                                         self.hyperparameters['dim_in']])
 
-        #self.placeholders['initial_state'] = tf.placeholder(tf.float32,
-        #                                                    shape=[None, self.hyperparameters['dim_state']])
-        #self.placeholders['initial_output'] = tf.placeholder(tf.float32,
-        #                                                     shape=[None, self.hyperparameters['dim_state']])
-
         self.placeholders['labels'] = tf.placeholder(tf.float32, shape=[None, 1])
+
+        self.placeholders['input_dropout'] = tf.placeholder(tf.float32)
 
     def _build_model(self):
         initial_state = tf.Variable(tf.fill([self.hyperparameters['dim_state']], 0.0))
@@ -42,7 +40,7 @@ class NlpGan(Model):
 
         # Discriminator LSTM cell
         discriminator = layers.LSTMCell(self.hyperparameters['dim_in'], self.hyperparameters['dim_state'],
-                                        initial_state_batch, initial_output_batch)
+                                        self.placeholders['input_dropout'], initial_state_batch, initial_output_batch)
 
         # Discriminator final dense layer for binary classification
         final_dense_layer = layers.FCLayer(

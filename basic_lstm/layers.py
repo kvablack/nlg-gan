@@ -11,7 +11,8 @@ class FCLayer:
         self.weights = []
         for dim_in in dim_in_list:
             self.weights.append(
-                tf.Variable(tf.truncated_normal([dim_in, dim_out], stddev=0.1))
+                #tf.Variable(tf.truncated_normal([dim_in, dim_out], stddev=0.1))\
+                tf.Variable(tf.contrib.layers.xavier_initializer()([dim_in, dim_out], tf.float32))
             )
 
         self.bias = tf.Variable(tf.fill([dim_out], 0.0))
@@ -35,11 +36,12 @@ class LSTMCell:
     Basic stateful LSTM cell with no peephole connections
     """
 
-    def __init__(self, dim_in, dim_state, initial_state, initial_output):
+    def __init__(self, dim_in, dim_state, input_dropout, initial_state, initial_output):
         """
         :param dim_state: dimensionality of the LSTM's state vector
         :param dim_in: dimensionality of the LSTM's input vectors
         :param initial_state: a tf tensor of the shape [batch_size, dim_state] to be used as the initial state
+        :param input_dropout: keep_prob for dropout on cell's input connections
         :param initial_output: a tf tensor of the shape [batch_size, dim_state] to be used as the initial 'previous output'
         """
         self.forget_gate = FCLayer([dim_in, dim_state], dim_state, tf.sigmoid)
@@ -49,6 +51,8 @@ class LSTMCell:
 
         self.initial_state = self.state = initial_state
         self.initial_output = self.output = initial_output
+
+        self.input_dropout = input_dropout
 
     def __reset(self):
         """
@@ -63,9 +67,10 @@ class LSTMCell:
         :param new_input: input tensor of the shape [batch_size, dim_in]
         :return: output tensor of the shape [batch_size, dim_state]
         """
-        self.state *= self.forget_gate(new_input, self.output)
-        self.state += self.input_gate(new_input, self.output) * self.candidate_creator(new_input, self.output)
-        self.output = tf.tanh(self.state) * self.output_gate(new_input, self.output)
+        new_input_drop = tf.nn.dropout(new_input, self.input_dropout)
+        self.state *= self.forget_gate(new_input_drop, self.output)
+        self.state += self.input_gate(new_input_drop, self.output) * self.candidate_creator(new_input_drop, self.output)
+        self.output = tf.tanh(self.state) * self.output_gate(new_input_drop, self.output)
         return self.output, self.state
 
     def __call__(self, inputs):
