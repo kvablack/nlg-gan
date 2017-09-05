@@ -1,25 +1,27 @@
 import tensorflow as tf
 import numpy as np
-import pickle
 from plot import Plotter
 from nltk.corpus import gutenberg
 from basic_lstm.model import NlpGan
 import utils
 
-SAVE_NAME = 'ADAM'
+SAVE_NAME = 'GAN_10_NORMING'
 
-LEARNING_RATE = 0.000004
-DIM_STATE = 500
+LEARNING_RATE = 0.000007
+D_DIM_STATE = 150
+G_DIM_STATE = 600
 WORD_DIM = 300
-SEQUENCE_LENGTH = 50
+SEQUENCE_LENGTH = 10
 BATCH_SIZE = 100
-INPUT_DROPOUT = 0.65
+D_KEEP_PROB = 0.5
+MAX_LOSS_DIFF = 0.05
+INSTANCE_VARIANCE = 0.15
 
 
 def nearest_neighbor(words, wordvecs_norm, wordvec_norm):
     similarities = np.dot(wordvecs_norm, wordvec_norm.reshape(-1)).reshape(-1)
     index = np.argmax(similarities)
-    return reverse_lookup(words, index)
+    return reverse_lookup(words, index), similarities[index]
 
 
 def nearest_neighbors(words, wordvecs_norm, wordvec_norm, n):
@@ -67,109 +69,124 @@ def main():
         words, wordvecs = utils.load_glove("glove", "glove.840B.300d.txt", "gutenberg",
                                            set(map(clean_word, gutenberg.words())))
 
+    wordvecs_norm = wordvecs / np.linalg.norm(wordvecs, axis=1).reshape(-1, 1)
+
     print("Loading corpus...")
-    # Convert corpus into wordvecs, replacing any words not in vocab with zero vector
-    sentences = [[wordvecs[words[clean_word(word)]] if clean_word(word) in words.keys() else np.zeros(WORD_DIM) for word in sentence]
+    # Convert corpus into normed wordvecs, replacing any words not in vocab with zero vector
+    sentences = [[wordvecs_norm[words[clean_word(word)]] if clean_word(word) in words.keys() else np.zeros(WORD_DIM)
+                  for word in sentence]
                  for sentence in gutenberg.sents()]
 
     print("Processing corpus...")
-    # Randomly swap words in each sentence
-    sentences_fake = list(map(rand_swap, sentences))
-
     # Pad sentences shorter than SEQUENCE_LENGTH with zero vectors and truncate sentences longer than SEQUENCE_LENGTH
-    sentences = list(map(pad_or_truncate, sentences))
-    sentences_fake = list(map(pad_or_truncate, sentences_fake))
+    s_train = list(map(pad_or_truncate, sentences))
 
-    np.random.shuffle(sentences)
-    np.random.shuffle(sentences_fake)
-    # Split up into train/eval sections, 97% train and 3% eval
-    s_train, s_eval = sentences[:int(len(sentences) * 0.97)], sentences[int(len(sentences) * 0.97):]
-    s_train_fake, s_eval_fake = sentences_fake[:int(len(sentences) * 0.97)], sentences_fake[int(len(sentences) * 0.97):]
+    np.random.shuffle(s_train)
 
     # Truncate to multiple of BATCH_SIZE
     s_train = s_train[:int(len(s_train) / BATCH_SIZE) * BATCH_SIZE]
-    s_train_fake = s_train_fake[:int(len(s_train_fake) / BATCH_SIZE) * BATCH_SIZE]
-
-    s_eval_len = len(s_eval)
-    # reshape to (SEQUENCE_LENGTH, BATCH_SIZE, WORD_DIM) while preserving sentence order; BATCH_SIZE is entire dataset
-    # in this case
-    s_eval = np.array(s_eval).reshape(-1, WORD_DIM).reshape(SEQUENCE_LENGTH, -1, WORD_DIM, order='F')
-    s_eval_fake = np.array(s_eval_fake).reshape(-1, WORD_DIM).reshape(SEQUENCE_LENGTH, -1, WORD_DIM, order='F')
 
     s_train_idxs = np.arange(len(s_train))
-    s_train_fake_idxs = np.arange(len(s_train))
 
     print("Generating graph...")
-    network = NlpGan(learning_rate=LEARNING_RATE, dim_state=DIM_STATE, dim_in=WORD_DIM, sequence_length=SEQUENCE_LENGTH)
+    network = NlpGan(learning_rate=LEARNING_RATE, d_dim_state=D_DIM_STATE, g_dim_state=G_DIM_STATE,
+                     dim_in=WORD_DIM, sequence_length=SEQUENCE_LENGTH)
 
     plotter = Plotter([2, 1], "Loss", "Accuracy")
     plotter.plot(0, 0, 0, 0)
+    plotter.plot(0, 0, 0, 1)
+    plotter.plot(0, 0, 1, 0)
     plotter.plot(0, 1, 1, 0)
 
+    #d_vars = [var for var in tf.trainable_variables() if 'discriminator' in var.name]
     saver = tf.train.Saver()
 
     with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
+        #eval(sess, network, words, wordvecs_norm, saver)
 
-        for epoch in range(100000):
+        sess.run(tf.global_variables_initializer())
+        #resume(sess, saver, plotter, "GAN_9_SEQUENCELENGTH_10", 59)
+
+        d_loss, g_loss = 0.0, 0.0
+        for epoch in range(0, 10000000):
             print("Epoch %d" % epoch)
 
             np.random.shuffle(s_train_idxs)
-            np.random.shuffle(s_train_fake_idxs)
             for batch in range(int(len(s_train_idxs) / BATCH_SIZE)):
                 # select next random batch of sentences
                 s_batch_real = [s_train[x] for x in s_train_idxs[batch:batch + BATCH_SIZE]] # shape (BATCH_SIZE, SEQUENCE_LENGTH, WORD_DIM)
-                s_batch_fake = [s_train_fake[x] for x in s_train_fake_idxs[batch:batch + BATCH_SIZE]]
 
                 # reshape to (SEQUENCE_LENGTH, BATCH_SIZE, WORD_DIM) while preserving sentence order
-                s_batch_real = np.array(s_batch_real).reshape(-1, WORD_DIM).reshape(SEQUENCE_LENGTH, BATCH_SIZE, WORD_DIM, order='F')
-                s_batch_fake = np.array(s_batch_fake).reshape(-1, WORD_DIM).reshape(SEQUENCE_LENGTH, BATCH_SIZE, WORD_DIM, order='F')
+                s_batch_real = np.array(s_batch_real).swapaxes(0, 1)
 
-                # real text
-                output_dict_real = sess.run(
-                    network.get_fetch_dict('d_loss', 'd_train'),
-                    network.get_feed_dict(inputs=s_batch_real, labels=np.ones([BATCH_SIZE, 1]),
-                                          input_dropout=INPUT_DROPOUT)
-                )
+                if d_loss - g_loss > MAX_LOSS_DIFF and False:
+                    output_dict = sess.run(
+                        network.get_fetch_dict('d_loss', 'd_train', 'g_loss'),
+                        network.get_feed_dict(inputs=s_batch_real, input_dropout=D_KEEP_PROB)
+                    )
+                elif g_loss - d_loss > MAX_LOSS_DIFF and False:
+                    output_dict = sess.run(
+                        network.get_fetch_dict('d_loss', 'g_loss', 'g_train'),
+                        network.get_feed_dict(inputs=s_batch_real, input_dropout=D_KEEP_PROB)
+                    )
+                else:
+                    output_dict = sess.run(
+                        network.get_fetch_dict('d_loss', 'd_train', 'g_loss', 'g_train'),
+                        network.get_feed_dict(inputs=s_batch_real, input_dropout=D_KEEP_PROB,
+                                              instance_variance=INSTANCE_VARIANCE)
+                    )
 
-                # fake text
-                output_dict_fake = sess.run(
-                    network.get_fetch_dict('d_loss', 'd_train'),
-                    network.get_feed_dict(inputs=s_batch_fake, labels=np.zeros([BATCH_SIZE, 1]),
-                                          input_dropout=INPUT_DROPOUT)
-                )
+                d_loss, g_loss = output_dict['d_loss'], output_dict['g_loss']
 
-                total_loss = (output_dict_real['d_loss'] + output_dict_fake['d_loss']) / 2.0
                 if batch % 10 == 0:
                     print("Finished training batch %d / %d" % (batch, int(len(s_train) / BATCH_SIZE)))
-                    print("Total Loss: %f" % total_loss)
-                    plotter.plot(epoch + (batch / int(len(s_train) / BATCH_SIZE)), total_loss, 0, 0)
+                    print("Discriminator Loss: %f" % output_dict['d_loss'])
+                    print("Generator Loss: %f" % output_dict['g_loss'])
+                    plotter.plot(epoch + (batch / int(len(s_train) / BATCH_SIZE)), d_loss, 0, 0)
+                    plotter.plot(epoch + (batch / int(len(s_train) / BATCH_SIZE)), g_loss, 0, 1)
 
                 if batch % 100 == 0:
-                    eval_accuracy, eval_loss = eval(network, s_eval, s_eval_fake, s_eval_len, sess)
-                    print("Total Accuracy: %f" % eval_accuracy)
-                    plotter.plot(epoch + (batch / int(len(s_train) / BATCH_SIZE)), eval_accuracy, 1, 0)
-                    plotter.plot(epoch + (batch / int(len(s_train) / BATCH_SIZE)), eval_loss, 0, 1)
+                    eval = sess.run(
+                        network.get_fetch_dict('g_outputs', 'd_accuracy'),
+                        network.get_feed_dict(inputs=s_batch_real, input_dropout=1.0,
+                                              instance_variance=INSTANCE_VARIANCE)
+                    )
+                    # reshape g_outputs to (BATCH_SIZE, SEQUENCE_LENGTH, WORD_DIM) while preserving sentence order
+                    generated = eval['g_outputs'].swapaxes(0, 1)
+                    for sentence in generated[:3]:
+                        for wordvec in sentence:
+                            norm = np.linalg.norm(wordvec)
+                            word, similarity = nearest_neighbor(words, wordvecs_norm, wordvec / norm)
+                            print("{}({:4.2f})".format(word, similarity), end=' ')
+                        print('\n---------')
+                    print("Total Accuracy: %f" % eval['d_accuracy'])
+                    plotter.plot(epoch + (batch / int(len(s_train) / BATCH_SIZE)), eval['d_accuracy'], 1, 0)
 
             saver.save(sess, './checkpoints/{}.ckpt'.format(SAVE_NAME),
                        global_step=epoch)
             plotter.save(SAVE_NAME)
 
 
-def eval(network, s_eval, s_eval_fake, s_eval_len, sess):
-    print("Evaluating accuracy...")
-    output_dict_eval_real = sess.run(
-        network.get_fetch_dict('d_accuracy', 'd_loss'),
-        network.get_feed_dict(inputs=s_eval, labels=np.ones([s_eval_len, 1]), input_dropout=1)
-    )
+def resume(sess, saver, plotter, save_name, epoch):
+    saver.restore(sess, "./checkpoints\\{}.ckpt-{}".format(save_name, epoch))
+    plotter.load(save_name)
 
-    output_dict_eval_fake = sess.run(
-        network.get_fetch_dict('d_accuracy', 'd_loss'),
-        network.get_feed_dict(inputs=s_eval_fake, labels=np.zeros([s_eval_len, 1]), input_dropout=1)
-    )
-    total_accuracy = (output_dict_eval_real['d_accuracy'] + output_dict_eval_fake['d_accuracy']) / 2.0
-    total_loss = (output_dict_eval_real['d_loss'] + output_dict_eval_fake['d_loss']) / 2.0
-    return total_accuracy, total_loss
+
+def eval(sess, network, words, wordvecs_norm, saver):
+    saver.restore(sess, "./checkpoints\\GAN_1.ckpt-28")
+    while True:
+        output_dict = sess.run(
+            network.get_fetch_dict('g_outputs'),
+            network.get_feed_dict(inputs=np.zeros([SEQUENCE_LENGTH, 10, WORD_DIM]))
+        )
+
+        generated = output_dict['g_outputs'].swapaxes(0, 1)
+        for sentence in generated:
+            print("----------------------------------------------------------")
+            for wordvec in sentence:
+                print("{}    --    {}".format(np.linalg.norm(wordvec),
+                                              nearest_neighbor(words, wordvecs_norm, wordvec / np.linalg.norm(wordvec))))
+
 
 if __name__ == '__main__':
     main()

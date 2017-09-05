@@ -75,11 +75,10 @@ class LSTMCell:
 
     def __call__(self, inputs):
         """
-        :param inputs: a tf.placeholder of the shape [sequence_length, batch_size, dim_in]
+        :param inputs: a list of length sequence_length with tensors of shape [batch_size, dim_in]
         :return: a tuple of the form (outputs, states) where both are lists of tensors of length sequence_length
         and shape [batch_size, dim_state]
         """
-        input_list = tf.unstack(inputs, axis=0)
-        outputs, states = zip(*[self.__update(x) for x in input_list])
+        outputs, states = zip(*[self.__update(x) for x in inputs])
         self.__reset()
         return outputs, states
