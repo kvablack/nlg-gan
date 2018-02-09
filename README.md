@@ -1,4 +1,4 @@
-## nlp-gan
+## nlg-gan
 
 This is a project I started for fun in the summer of 2017 after reading about GANs and wondering if they could be applied to natural language processing. 
 
